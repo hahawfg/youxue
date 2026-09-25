@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 暴露给系统相机的目录。
+
+  只开一个 cache 下的子目录，不是整个 cacheDir：FileProvider 的路径
+  白名单是「我能把哪些文件交给别的应用写」，开得越窄越安全。
+  相机拍完的临时图就放这儿，系统清理缓存时会一并回收。
+-->
+<paths>
+    <cache-path
+        name="ocr_shots"
+        path="ocr/" />
+</paths>
