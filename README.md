@@ -13,6 +13,18 @@
 - **构建配置**：AGP 8.5.2 / Kotlin 2.0.20 / Gradle 8.9 / JDK 17 target
 - **SDK**：compileSdk 35 / minSdk 24 / targetSdk 35
 
+## 目录
+
+- [功能](#功能)
+- [截图](#截图)
+- [隐私](#隐私)
+- [目录结构](#目录结构)
+- [环境要求](#环境要求)
+- [构建](#构建)
+- [设计说明](#设计说明)
+- [参与贡献](#参与贡献)
+- [开源协议](#开源协议)
+
 ## 功能
 
 | 功能 | 状态 | 说明 |
@@ -25,6 +37,20 @@
 
 > 首页只摆**已经能用**的入口。规划中的功能不放进宫格做灰显占位——
 > 入口页出现点不动的格子，用户的第一反应是「这 App 坏了」，不是「还没做」。
+
+## 截图
+
+真机截图（点开看原图）。
+
+| 首页 | 听写录入 | 听写进行 |
+|:--:|:--:|:--:|
+| <a href="img/1.jpg"><img src="img/1.jpg" width="220" alt="首页：四个功能入口"></a> | <a href="img/2.jpg"><img src="img/2.jpg" width="220" alt="听写录入：词表与间隔设置"></a> | <a href="img/3.jpg"><img src="img/3.jpg" width="220" alt="听写进行：环形倒计时"></a> |
+| 一行四格，有待办时右上角挂数字角标 | 词表可手打、可拍照识字；实时估算书写总时长 | 顶栏可调每字时长，底部可跳词、可提前完成 |
+
+| 学习任务 | 学习计划 | 听写记录 |
+|:--:|:--:|:--:|
+| <a href="img/4.jpg"><img src="img/4.jpg" width="220" alt="学习任务：日期条"></a> | <a href="img/5.jpg"><img src="img/5.jpg" width="220" alt="新建学习计划"></a> | <a href="img/6.jpg"><img src="img/6.jpg" width="220" alt="听写记录列表"></a> |
+| 连续日期条，长按卡片可拖到某天（图为空态） | 按周几点选重复日，起止日期可留空 | 每次听写自动记下词语，可逐词重听、整批复制 |
 
 ## 隐私
 
@@ -41,6 +67,7 @@ youxue-app/
 ├── build.gradle.kts
 ├── gradle.properties
 ├── gradle/libs.versions.toml      # 依赖版本集中管理
+├── img/                           # README 截图
 └── app/
     ├── build.gradle.kts
     └── src/main/
@@ -64,6 +91,8 @@ youxue-app/
 - 依赖均可用本地 Gradle 缓存构建（已适配离线场景）
 
 ## 构建
+
+> 不想自己编译？到 [Releases](../../releases) 下载已签名的 APK 直接安装。
 
 ```bash
 cd youxue-app

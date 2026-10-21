@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-"""生成「优学」App 图标：自适应图标前景 + 各密度传统图标 PNG。"""
-import math
+"""生成「优学」App 图标：一顶学士帽（博士帽），自适应前景 + 各密度传统图标 PNG。
+
+画面只有三块：帽板（俯视菱形）、帽身（压在帽板下沿）、侧边垂下的流苏。
+**不放任何文字**——48dp 的图标里一个字只剩 7px 高，除了糊成一团什么也传达不了。
+"""
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter
 
 # 按脚本位置定位资源目录，clone 到任何路径都能直接跑
 RES = str(Path(__file__).resolve().parents[1] / "app" / "src" / "main" / "res")
@@ -12,21 +15,17 @@ RES = str(Path(__file__).resolve().parents[1] / "app" / "src" / "main" / "res")
 # 品牌色
 C_BG_TOP = (79, 124, 255)
 C_BG_BOTTOM = (58, 92, 214)
-C_ACCENT = (255, 255, 255)
+C_ACCENT = (255, 255, 255)      # 帽板与流苏
+C_BAND = (176, 202, 255)        # 帽身：比帽板暗一档，否则两个面糊成一整块
 
-# 只有重新生成图标时才需要字体。非 Windows 环境可用 YX_FONT 指定中文字体文件
-FONT_BOLD = os.environ.get("YX_FONT") or r"C:\Windows\Fonts\msyhbd.ttc"
-FONT_BOLD_ALT = r"C:\Windows\Fonts\msyh.ttc"
+# 超采样倍数：先在 8 倍画布上画再缩回目标尺寸。
+# PIL 的 polygon / line 在目标尺寸上直接画是硬锯齿，48px 的 mipmap-mdpi 尤其明显
+SS = 8
 
-
-def load_font(size):
-    for path in (FONT_BOLD, FONT_BOLD_ALT):
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
+# 传统图标铺满整块方形，可以用满一点；自适应图标必须待在中心 66% 安全区里。
+# 帽子本身横宽竖扁，不放大一点在 48px 上会显得很小
+LEGACY_SCALE = 1.12
+ADAPTIVE_SCALE = 0.70
 
 
 def vertical_gradient(size, top, bottom):
@@ -51,53 +50,59 @@ def rounded_mask(size, radius):
 
 
 def draw_content(canvas_size, content_scale=1.0):
-    """在透明画布上绘制图标内容（书本 + 声波纹 + 文字）。"""
+    """在透明画布上绘制学士帽。
+
+    `canvas_size` 是超采样后的尺寸；所有尺寸都按 `unit` 的比例算，
+    所以同一份代码既画 48px 的传统图标，也画 432px 的自适应前景。
+    """
     S = canvas_size
-    layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    # 透明底取「白 + alpha=0」而不是「黑 + alpha=0」：
+    # 降采样会把 RGB 和 alpha 一起平均，黑底会在边缘拖出一圈灰边
+    layer = Image.new("RGBA", (S, S), (255, 255, 255, 0))
     d = ImageDraw.Draw(layer)
 
-    cx, cy = S / 2, S / 2
+    cx = S / 2
+    cy = S / 2 - S * content_scale * 0.022   # 帽身压得比帽板深，整体上移一点才视觉居中
     unit = S * content_scale
+    stroke = max(1, int(unit * 0.022))
 
-    # ---- 打开的书本 ----
-    bw = unit * 0.52          # 书宽
-    bh = unit * 0.30          # 书高
-    left, top = cx - bw / 2, cy - bh / 2 + unit * 0.055
-    right, bottom = cx + bw / 2, top + bh
-    r = unit * 0.035
-
-    # 左页 / 右页（中间留书脊缝隙）
-    gap = unit * 0.016
+    # ---- 帽身：先画，上沿会被帽板压住 ----
+    band_w = unit * 0.295
     d.rounded_rectangle(
-        [left, top, cx - gap / 2, bottom], radius=r, fill=C_ACCENT
+        [cx - band_w / 2, cy - unit * 0.012, cx + band_w / 2, cy + unit * 0.150],
+        radius=unit * 0.050,
+        fill=C_BAND,
     )
-    d.rounded_rectangle(
-        [cx + gap / 2, top, right, bottom], radius=r, fill=C_ACCENT
+
+    # ---- 帽板：俯视的菱形，横长竖短（竖太深就成了帐篷）----
+    d.polygon(
+        [
+            (cx - unit * 0.310, cy - unit * 0.005),
+            (cx, cy - unit * 0.105),
+            (cx + unit * 0.310, cy - unit * 0.005),
+            (cx, cy + unit * 0.062),
+        ],
+        fill=C_ACCENT,
     )
-    # 书脊
-    d.line([cx, top + unit * 0.012, cx, bottom - unit * 0.012], fill=C_BG_BOTTOM, width=max(2, int(unit * 0.014)))
 
-    # 书页横线（用背景色描出来，形成"文字行"的感觉）
-    line_w = max(2, int(unit * 0.016))
-    for i in range(3):
-        y = top + bh * (0.28 + i * 0.22)
-        d.line([left + unit * 0.045, y, cx - gap / 2 - unit * 0.035, y], fill=C_BG_BOTTOM, width=line_w)
-        d.line([cx + gap / 2 + unit * 0.035, y, right - unit * 0.045, y], fill=C_BG_BOTTOM, width=line_w)
+    # ---- 流苏：从帽板右角垂下，一点点向外的弧度 ----
+    p0 = (cx + unit * 0.305, cy - unit * 0.005)
+    p1 = (cx + unit * 0.345, cy + unit * 0.055)
+    p2 = (cx + unit * 0.322, cy + unit * 0.135)
+    pts = []
+    for i in range(25):
+        t = i / 24
+        pts.append(
+            (
+                (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0],
+                (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1],
+            )
+        )
+    d.line(pts, fill=C_ACCENT, width=stroke, joint="curve")
 
-    # ---- 声波弧线（书本上方）----
-    arcs_cx, arcs_cy = cx, top - unit * 0.035
-    for i, (rr, alpha) in enumerate(((0.075, 235), (0.115, 175), (0.155, 115))):
-        rad = unit * rr
-        box = [arcs_cx - rad, arcs_cy - rad, arcs_cx + rad, arcs_cy + rad]
-        d.arc(box, start=200, end=340, fill=C_ACCENT + (alpha,), width=max(2, int(unit * 0.018)))
-
-    # ---- 底部「学」字 ----
-    fs = int(unit * 0.155)
-    font = load_font(fs)
-    txt = "学"
-    bbox = d.textbbox((0, 0), txt, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    d.text((cx - tw / 2 - bbox[0], bottom + unit * 0.045 - bbox[1]), txt, font=font, fill=C_ACCENT)
+    # 流苏末端的小坠子
+    kr = unit * 0.030
+    d.ellipse([p2[0] - kr, p2[1] - kr, p2[0] + kr, p2[1] + kr], fill=C_ACCENT)
 
     return layer
 
@@ -113,10 +118,10 @@ def make_full_icon(size, rounded=False):
         [-size * 0.18, -size * 0.32, size * 0.62, size * 0.48],
         fill=(255, 255, 255, 26),
     )
-    glow = glow.filter(__import__("PIL.ImageFilter", fromlist=["ImageFilter"]).GaussianBlur(size * 0.06))
+    glow = glow.filter(ImageFilter.GaussianBlur(size * 0.06))
     base = Image.alpha_composite(base, glow)
 
-    content = draw_content(size)
+    content = draw_content(size * SS, content_scale=LEGACY_SCALE).resize((size, size), Image.LANCZOS)
     out = Image.alpha_composite(base, content)
 
     if rounded:
@@ -126,10 +131,8 @@ def make_full_icon(size, rounded=False):
 
 def make_foreground(size):
     """自适应图标前景：内容限制在中心 66% 安全区内。"""
-    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    inner = draw_content(size, content_scale=0.66)
-    layer = Image.alpha_composite(layer, inner)
-    return layer
+    inner = draw_content(size * SS, content_scale=ADAPTIVE_SCALE)
+    return inner.resize((size, size), Image.LANCZOS)
 
 
 def main():
