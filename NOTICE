@@ -1,0 +1,32 @@
+优学 (Youxue)
+Copyright 2026 toobug
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------------
+第三方组件
+
+本项目的构建依赖以下第三方组件，其版权归各自所有者，适用各自的许可条款：
+
+  * AndroidX / Jetpack Compose / DataStore / Navigation
+    Copyright The Android Open Source Project
+    Apache License 2.0
+
+  * ML Kit Text Recognition v2 (com.google.mlkit:text-recognition-chinese)
+    Copyright Google LLC
+    按 Google ML Kit 服务条款使用。本仓库的源码分发不包含其模型与二进制文件，
+    它们由 Maven 依赖在构建时解析获得。
+
+  * JUnit 4
+    Copyright JUnit
+    Eclipse Public License 1.0（仅用于单元测试，不随应用分发）

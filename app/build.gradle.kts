@@ -5,14 +5,14 @@ plugins {
 }
 
 android {
-    namespace = "com.youxue.app"
+    namespace = "cn.com.toobug.youxue"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.youxue.app"
+        applicationId = "cn.com.toobug.youxue"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
+        versionCode = 107
         versionName = "1.0.7"
     }
 

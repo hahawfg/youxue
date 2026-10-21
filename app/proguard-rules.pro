@@ -1,1 +1,1 @@
--keep class com.youxue.app.** { *; }
+-keep class cn.com.toobug.youxue.** { *; }

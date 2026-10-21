@@ -2,17 +2,20 @@
 """生成「优学」App 图标：自适应图标前景 + 各密度传统图标 PNG。"""
 import math
 import os
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-RES = r"F:\dcloud\youxue\youxue-app\app\src\main\res"
+# 按脚本位置定位资源目录，clone 到任何路径都能直接跑
+RES = str(Path(__file__).resolve().parents[1] / "app" / "src" / "main" / "res")
 
 # 品牌色
 C_BG_TOP = (79, 124, 255)
 C_BG_BOTTOM = (58, 92, 214)
 C_ACCENT = (255, 255, 255)
 
-FONT_BOLD = r"C:\Windows\Fonts\msyhbd.ttc"
+# 只有重新生成图标时才需要字体。非 Windows 环境可用 YX_FONT 指定中文字体文件
+FONT_BOLD = os.environ.get("YX_FONT") or r"C:\Windows\Fonts\msyhbd.ttc"
 FONT_BOLD_ALT = r"C:\Windows\Fonts\msyh.ttc"
 
 
