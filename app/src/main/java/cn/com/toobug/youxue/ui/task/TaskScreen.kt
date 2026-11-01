@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,11 +75,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -95,16 +98,23 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.com.toobug.youxue.YouxueApplication
 import cn.com.toobug.youxue.data.TaskItem
+import cn.com.toobug.youxue.data.TaskPriority
 import cn.com.toobug.youxue.task.GroupAccent
 import cn.com.toobug.youxue.task.TaskGroup
+import cn.com.toobug.youxue.task.TaskGrouper
 import cn.com.toobug.youxue.task.TaskUiState
 import cn.com.toobug.youxue.ui.theme.BlueContainer
 import cn.com.toobug.youxue.ui.theme.BluePrimary
 import cn.com.toobug.youxue.ui.theme.OrangeAccent
+import cn.com.toobug.youxue.ui.theme.PriorityHigh
+import cn.com.toobug.youxue.ui.theme.PriorityLow
+import cn.com.toobug.youxue.ui.theme.PriorityNormal
+import cn.com.toobug.youxue.ui.theme.PriorityUrgent
 import cn.com.toobug.youxue.ui.theme.Spacing
 import cn.com.toobug.youxue.util.DayMath
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.intellij.lang.annotations.JdkConstants.HorizontalAlignment
 import kotlin.math.roundToInt
 
 /** 拖拽中的视觉状态 */
@@ -117,6 +127,22 @@ private data class DragVisual(
     val accumY: Float = 0f,
     /** 当前指针悬停在哪个日期上；null 表示不在任何日期格上 */
     val hoverDay: Long? = null,
+    /** 拖动开始时这一组的显示顺序（含被拖的那条），落点换算要靠它 */
+    val groupIds: List<String> = emptyList(),
+    /** 松手会插到这一组的第几位（**已去掉被拖那条**）；null = 指针不在列表里 */
+    val insertAt: Int? = null,
+    /** 指针在根坐标系里的位置。列表自动滚动之后要拿它重算落点 */
+    val pointer: Offset = Offset.Zero,
+)
+
+/**
+ * 一次拖动的结果。两种落点二选一：
+ * 落在日期格上 = 改截止日；落在列表里 = 调整顺序；两边都不沾 = null（取消）。
+ */
+private data class TaskDrop(
+    val day: Long? = null,
+    val insertAt: Int? = null,
+    val groupIds: List<String> = emptyList(),
 )
 
 /**
@@ -139,6 +165,12 @@ private class TaskDragState {
     /** 日期格在根坐标系里的位置，由各格子自己上报 */
     val targets = mutableStateMapOf<Long, Rect>()
 
+    /** 每张卡片在根坐标系里的矩形，由卡片自己上报。排序落点全靠它们，不用「序号 × 高度」算 */
+    val cards = mutableStateMapOf<String, Rect>()
+
+    /** 列表可滚动区域的边界。落在它外面又没命中日期格 = 取消，而不是「插到第一位」 */
+    var listBounds: Rect = Rect.Zero
+
     /** 页面根容器的原点，用于把根坐标换算成浮层自身坐标 */
     var containerOrigin: Offset = Offset.Zero
 
@@ -150,31 +182,80 @@ private class TaskDragState {
 
     fun isDragging(taskId: String): Boolean = visual?.task?.id == taskId
 
-    fun begin(task: TaskItem, cardTopLeft: Offset, localTouch: Offset, size: IntSize) {
+    /**
+     * 松手会插到第几位：从上往下数，越过第几张卡片的**中线**就退一位。
+     *
+     * 用中线而不是「落在卡片内部」，是为了让两张卡片之间的空隙也有确定归属——
+     * 否则手指停在缝里就变成「不排序」，用户会以为没拖上。
+     */
+    private fun insertIndex(pointer: Offset, groupIds: List<String>, movedId: String): Int? {
+        if (!listBounds.contains(pointer)) return null
+        // 不可排序的组（已完成）传的是空表：落点算成 null，等同于取消
+        if (groupIds.isEmpty()) return null
+        var index = 0
+        for (id in groupIds) {
+            if (id == movedId) continue
+            val rect = cards[id] ?: continue
+            if (pointer.y > rect.center.y) index++ else break
+        }
+        return index
+    }
+
+    fun begin(
+        task: TaskItem,
+        cardTopLeft: Offset,
+        localTouch: Offset,
+        size: IntSize,
+        groupIds: List<String>,
+    ) {
+        val pointer = cardTopLeft + localTouch
         visual = DragVisual(
             task = task,
             startLeft = cardTopLeft.x - containerOrigin.x,
             startTop = cardTopLeft.y - containerOrigin.y,
             widthPx = size.width,
-            hoverDay = targetAt(cardTopLeft + localTouch),
+            hoverDay = targetAt(pointer),
+            groupIds = groupIds,
+            insertAt = insertIndex(pointer, groupIds, task.id),
+            pointer = pointer,
         )
     }
 
     fun update(localTouch: Offset, delta: Offset, cardTopLeft: Offset) {
         val v = visual ?: return
+        val pointer = cardTopLeft + localTouch
         visual = v.copy(
             accumX = v.accumX + delta.x,
             accumY = v.accumY + delta.y,
-            hoverDay = targetAt(cardTopLeft + localTouch),
+            hoverDay = targetAt(pointer),
+            insertAt = insertIndex(pointer, v.groupIds, v.task.id),
+            pointer = pointer,
         )
     }
 
-    /** @return 松手时悬停的日期；null 表示没落在任何日期上，应视为取消 */
-    fun finish(): Long? {
-        val day = visual?.hoverDay
+    /**
+     * 列表因为自动滚动而动了之后，用**原来的指针位置**重算一次落点。
+     *
+     * 手指不动的时候不会有新的拖动事件，卡片却已经滚走了——不补这一下，
+     * 松手位置就会落在滚动之前的判断上，表现是「眼看着停在 B 上，结果插到了 C 后面」。
+     */
+    fun refreshDropTarget() {
+        val v = visual ?: return
+        visual = v.copy(insertAt = insertIndex(v.pointer, v.groupIds, v.task.id))
+    }
+
+    /** @return 松手时的落点；null 表示两边都没沾上，应视为取消 */
+    fun finish(): TaskDrop? {
+        val v = visual
         visual = null
         dragEndedAt = System.currentTimeMillis()
-        return day
+        if (v == null) return null
+        val day = v.hoverDay
+        return when {
+            day != null -> TaskDrop(day = day, groupIds = v.groupIds)
+            v.insertAt != null -> TaskDrop(insertAt = v.insertAt, groupIds = v.groupIds)
+            else -> null
+        }
     }
 
     fun cancel() {
@@ -202,6 +283,7 @@ private data class EditorTarget(
     val title: String = "",
     val content: String = "",
     val endDay: Long? = null,
+    val priority: TaskPriority = TaskPriority.DEFAULT,
 )
 
 /**
@@ -243,6 +325,34 @@ fun TaskScreen(
     // 换日期时列表回到顶部。否则会停在上一格内容的中间，看着像「没切过去」
     LaunchedEffect(state.selectedDay) {
         if (!state.loading) listScroll.animateScrollTo(0)
+    }
+
+    // 拖动时是否靠近列表上下边缘 → 自动滚动。
+    // 没有这一下，长列表里想把卡片拖到屏幕外就只能「先放下、滚一段、再拖一次」。
+    // 用 derivedStateOf 把「布尔值」隔一层，避免整个页面订阅 visual 每帧重组
+    val dragging by remember { derivedStateOf { drag.visual != null } }
+    val density = LocalDensity.current
+    LaunchedEffect(dragging) {
+        if (!dragging) return@LaunchedEffect
+        val edge = with(density) { 64.dp.toPx() }
+        val step = with(density) { 12.dp.toPx() }
+        while (isActive) {
+            val v = drag.visual
+            val bounds = drag.listBounds
+            if (v != null && bounds.height > 0f) {
+                val dy = when {
+                    v.pointer.y < bounds.top + edge -> -step
+                    v.pointer.y > bounds.bottom - edge -> step
+                    else -> 0f
+                }
+                if (dy != 0f) {
+                    listScroll.scrollBy(dy)
+                    // 手指没动，但卡片滚走了，落点必须跟着重算
+                    drag.refreshDropTarget()
+                }
+            }
+            delay(16)
+        }
     }
 
     Surface(
@@ -289,6 +399,9 @@ fun TaskScreen(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
+                        // 列表视口的边界：指针落在它外面又没有命中日期格时，这次拖动算取消，
+                        // 不能默认成「插到第一位」——手滑错过日期格不该把任务挪到顶上
+                        .onGloballyPositioned { drag.listBounds = it.boundsInRoot() }
                 ) {
                     when {
                         state.loading -> LoadingState()
@@ -307,10 +420,17 @@ fun TaskScreen(
                                         title = task.title,
                                         content = task.content,
                                         endDay = task.endDay,
+                                        priority = task.priority,
                                     )
                                 }
                             },
-                            onDropOn = { taskId, day -> viewModel.moveTo(taskId, day) },
+                            onDrop = { taskId, drop ->
+                                when {
+                                    drop.day != null -> viewModel.moveTo(taskId, drop.day)
+                                    drop.insertAt != null ->
+                                        viewModel.reorder(taskId, drop.insertAt, drop.groupIds)
+                                }
+                            },
                         )
                     }
                 }
@@ -319,6 +439,9 @@ fun TaskScreen(
             // 拖动中的卡片浮层。最后一个绘制，所以盖在所有内容之上。
             // 单独抽成组件是为了把「读取 visual」这个动作限制在它自己的重组范围里。
             DragOverlay(drag = drag)
+
+            // 排序落点指示线。同样单独抽组件，理由同上
+            SortIndicator(drag = drag)
 
             FloatingActionButton(
                 onClick = { editor = EditorTarget() },
@@ -338,9 +461,9 @@ fun TaskScreen(
         TaskEditorSheet(
             target = target,
             onDismiss = { editor = null },
-            onSave = { title, content, endDay ->
-                if (target.id == null) viewModel.add(title, content, endDay)
-                else viewModel.update(target.id, title, content, endDay)
+            onSave = { title, content, endDay, priority ->
+                if (target.id == null) viewModel.add(title, content, endDay, priority)
+                else viewModel.update(target.id, title, content, endDay, priority)
                 editor = null
             },
             onDelete = if (target.id == null) {
@@ -619,7 +742,7 @@ private fun TaskList(
     listScroll: ScrollState,
     onToggle: (String) -> Unit,
     onEdit: (TaskItem) -> Unit,
-    onDropOn: (String, Long) -> Unit,
+    onDrop: (String, TaskDrop) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -630,14 +753,19 @@ private fun TaskList(
     ) {
         state.groups.forEach { group ->
             GroupHeader(group = group)
+            // 排序只在这几组里成立：点「已完成」区按完成时刻倒序，是一份流水账
+            val sortable = group.id != TaskGrouper.GROUP_DONE
+            val groupIds = group.tasks.map { it.id }
             group.tasks.forEach { task ->
                 TaskCard(
                     task = task,
                     selectedDay = state.selectedDay,
                     drag = drag,
+                    sortable = sortable,
+                    groupIds = groupIds,
                     onToggle = { onToggle(task.id) },
                     onEdit = { onEdit(task) },
-                    onDropOn = { day -> onDropOn(task.id, day) },
+                    onDrop = { drop -> onDrop(task.id, drop) },
                 )
             }
         }
@@ -687,22 +815,38 @@ private fun GroupHeader(group: TaskGroup) {
     }
 }
 
+/** 紧急度对应的颜色。放在 UI 层：`Color` 是 Compose 类型，data 层要保持纯 Kotlin 可测 */
+private fun priorityColor(priority: TaskPriority): Color = when (priority) {
+    TaskPriority.URGENT -> PriorityUrgent
+    TaskPriority.HIGH -> PriorityHigh
+    TaskPriority.NORMAL -> PriorityNormal
+    TaskPriority.LOW -> PriorityLow
+}
+
 @Composable
 private fun TaskCard(
     task: TaskItem,
     selectedDay: Long,
     drag: TaskDragState,
+    /** 这一组能不能拖排序。「已完成」组不行——它按完成时刻倒序，是一份流水账 */
+    sortable: Boolean,
+    /** 这一组当前的显示顺序（含自己），排序落点要拿它当坐标系 */
+    groupIds: List<String>,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
-    onDropOn: (Long) -> Unit,
+    onDrop: (TaskDrop) -> Unit,
 ) {
     var cardTopLeft by remember { mutableStateOf(Offset.Zero) }
     var cardSize by remember { mutableStateOf(IntSize.Zero) }
 
+    val strip = priorityColor(task.priority)
+
     // 手势协程只在 key 变化时重启，闭包里必须读到最新值
     val currentTask by rememberUpdatedState(task)
-    val currentOnDrop by rememberUpdatedState(onDropOn)
+    val currentOnDrop by rememberUpdatedState(onDrop)
     val currentOnEdit by rememberUpdatedState(onEdit)
+    val currentGroupIds by rememberUpdatedState(groupIds)
+    val currentSortable by rememberUpdatedState(sortable)
 
     // 同上：用 derivedStateOf 把「是不是我在被拖」这个布尔值隔离出来
     val isDragging by remember(task.id) {
@@ -732,17 +876,27 @@ private fun TaskCard(
                 .onGloballyPositioned {
                     cardTopLeft = it.positionInRoot()
                     cardSize = it.size
+                    // 排序落点靠这些矩形算，不用「序号 × 行高」——卡片高度会随内容行数变
+                    drag.cards[task.id] = it.boundsInRoot()
                 }
                 .pointerInput(task.id) {
                     detectDragGesturesAfterLongPress(
                         onDragStart = { local ->
-                            drag.begin(currentTask, cardTopLeft, local, cardSize)
+                            drag.begin(
+                                task = currentTask,
+                                cardTopLeft = cardTopLeft,
+                                localTouch = local,
+                                size = cardSize,
+                                // 不可排序的组传空：这样落点会算成 null，等于取消，
+                                // 不必在界面里再分一次支
+                                groupIds = if (currentSortable) currentGroupIds else emptyList(),
+                            )
                         },
                         onDrag = { change, amount ->
                             change.consume()
                             drag.update(change.position, amount, cardTopLeft)
                         },
-                        onDragEnd = { drag.finish()?.let { day -> currentOnDrop(day) } },
+                        onDragEnd = { drag.finish()?.let { drop -> currentOnDrop(drop) } },
                         onDragCancel = { drag.cancel() },
                     )
                 }
@@ -787,27 +941,66 @@ private fun TaskCard(
                     // 否则用户不知道「它到底几号要交」。
                     val overdue = task.isOverdue(selectedDay)
                     val endLabel = task.endDay?.takeIf { it != selectedDay }
-                    if (endLabel != null) {
+                    // 只有「紧急」「较高」出文字标签：色条四档都有，但把轻重**只**寄托在
+                    // 颜色上，色觉障碍用户就完全读不出来了，所以最要紧的两档必须有字
+                    val showPriority =
+                        task.priority == TaskPriority.URGENT || task.priority == TaskPriority.HIGH
+                    if (endLabel != null || showPriority) {
                         Spacer(Modifier.height(Spacing.xs))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (overdue) MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
-                                    else BlueContainer
-                                )
-                                .padding(horizontal = Spacing.sm, vertical = 1.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                         ) {
-                            Text(
-                                text = "${if (overdue) "已过期 · " else "截止 "}${DayMath.shortLabel(endLabel)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (overdue) MaterialTheme.colorScheme.error else BluePrimary,
-                            )
+                            if (showPriority) {
+                                val color = priorityColor(task.priority)
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(color.copy(alpha = 0.12f))
+                                        .padding(horizontal = Spacing.sm, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = task.priority.label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = color,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+                            if (endLabel != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(
+                                            if (overdue) MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                                            else BlueContainer
+                                        )
+                                        .padding(horizontal = Spacing.sm, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "${if (overdue) "已过期 · " else "截止 "}${DayMath.shortLabel(endLabel)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (overdue) MaterialTheme.colorScheme.error else BluePrimary,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+
+        // 左侧紧急度色条。画在卡片**之上**而不是塞进卡片内容里：卡片内的 padding
+        // 已经排好了，为了 4dp 装饰再套一层 Row 就得把整段内容重新缩进一遍。
+        // 圆角要自己裁一下，否则会从卡片的圆角处探出一个直角
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                .drawBehind {
+                    drawRect(color = strip, size = size.copy(width = 4.dp.toPx()))
+                }
+        )
     }
 }
 
@@ -862,15 +1055,72 @@ private fun DragOverlay(drag: TaskDragState) {
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = if (visual.hoverDay != null) "松手把截止日改到这天" else "拖到日期上",
+                        text = when {
+                            visual.hoverDay != null -> "松手把截止日改到这天"
+                            visual.insertAt != null -> "松手排到这里"
+                            else -> "拖到日期上改日期，拖到列表里排序"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (visual.hoverDay != null) BluePrimary
+                        color = if (visual.hoverDay != null || visual.insertAt != null) BluePrimary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * 排序落点指示线。
+ *
+ * 只画一根线、不让卡片实时让位：列表是手写的 Column + verticalScroll，
+ * 没有 LazyColumn 那种位移动画，实时腾挪只会「唰」地跳一下，反而看不清会插到哪。
+ *
+ * 线的位置直接取各卡片的实际矩形，所以滚动、标题折行、内容变高都不会偏——
+ * 用「序号 × 行高」算的话，卡片一换行就失准。
+ */
+@Composable
+private fun SortIndicator(drag: TaskDragState) {
+    val v = drag.visual ?: return
+    // 悬停在日期格上时，这次拖动的语义是「改日期」，这时候不该再画排序线
+    if (v.hoverDay != null) return
+    val insertAt = v.insertAt ?: return
+
+    val others = v.groupIds.filter { it != v.task.id }
+    if (others.isEmpty()) return
+
+    val anchor: Rect
+    val lineY: Float
+    when {
+        insertAt <= 0 -> {
+            anchor = drag.cards[others.first()] ?: return
+            lineY = anchor.top
+        }
+        insertAt >= others.size -> {
+            anchor = drag.cards[others.last()] ?: return
+            lineY = anchor.bottom
+        }
+        else -> {
+            anchor = drag.cards[others[insertAt]] ?: return
+            lineY = anchor.top
+        }
+    }
+
+    val density = LocalDensity.current
+    val halfHeight = with(density) { 1.5.dp.toPx() }
+    Box(
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    (anchor.left - drag.containerOrigin.x).roundToInt(),
+                    (lineY - drag.containerOrigin.y - halfHeight).roundToInt(),
+                )
+            }
+            .width(with(density) { anchor.width.toDp() })
+            .height(3.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(BluePrimary)
+    )
 }
 
 // ------------------------------------------------------------------ 空态
@@ -945,13 +1195,14 @@ private fun DayEmptyState() {
 private fun TaskEditorSheet(
     target: EditorTarget,
     onDismiss: () -> Unit,
-    onSave: (title: String, content: String, endDay: Long?) -> Unit,
+    onSave: (title: String, content: String, endDay: Long?, priority: TaskPriority) -> Unit,
     onDelete: (() -> Unit)?,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var title by remember(target.id) { mutableStateOf(target.title) }
     var content by remember(target.id) { mutableStateOf(target.content) }
     var endDay by remember(target.id) { mutableStateOf(target.endDay) }
+    var priority by remember(target.id) { mutableStateOf(target.priority) }
     var showPicker by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
@@ -997,6 +1248,58 @@ private fun TaskEditorSheet(
                 placeholder = { Text("要做什么、有什么要求") },
                 shape = RoundedCornerShape(14.dp),
                 colors = TextFieldDefaults.colors(focusedIndicatorColor = BluePrimary),
+            )
+
+            Spacer(Modifier.height(Spacing.md))
+
+            // 紧急程度：四档一字排开，不做下拉——四个选项不值得多一次点击
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            ) {
+                TaskPriority.entries.forEach { option ->
+                    val selected = option == priority
+                    val color = priorityColor(option)
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (selected) color.copy(alpha = 0.14f)
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .border(
+                                width = if (selected) 1.5.dp else 1.dp,
+                                color = if (selected) color else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            .clickable { priority = option }
+                            .padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(color)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = option.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (selected) color else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "只用来标记轻重，不会改变排列顺序——顺序由你拖动决定",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = Spacing.xs, top = Spacing.xs),
             )
 
             Spacer(Modifier.height(Spacing.md))
@@ -1049,7 +1352,7 @@ private fun TaskEditorSheet(
                     Spacer(Modifier.width(Spacing.sm))
                 }
                 Button(
-                    onClick = { onSave(title, content, endDay) },
+                    onClick = { onSave(title, content, endDay, priority) },
                     enabled = title.isNotBlank(),
                     modifier = Modifier
                         .weight(1f)

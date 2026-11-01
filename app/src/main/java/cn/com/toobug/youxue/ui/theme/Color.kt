@@ -48,3 +48,14 @@ val DarkOutline = Color(0xFF3A3F4C)
 val BluePrimaryLight = Color(0xFF9DB6FF)
 val BlueContainerDark = Color(0xFF243A80)
 val OrangeAccentLight = Color(0xFFFFB27A)
+
+// ---- 任务紧急度 ----
+// 只用来给卡片左侧那条 4dp 色条上色，不参与排序。
+// 四档的「轻重」要能在一指宽的色条上分出来，所以选的是红→橙→蓝→灰的递进：
+// 红橙是「要留意」，蓝是默认档（与品牌色同源，不至于让每张卡片都刺眼），
+// 灰是「可以先放一放」。没有用绿——中文语境里绿容易被读成「已完成」。
+val PriorityUrgent = Color(0xFFE5484D)
+val PriorityHigh = Color(0xFFF08A24)
+val PriorityNormal = Color(0xFF3D6BFF)
+val PriorityLow = Color(0xFF8A94A6)
+

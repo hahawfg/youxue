@@ -19,8 +19,14 @@ object TaskCodec {
     private const val FIELD_SEP = '|'
     private const val LINE_SEP = '\n'
 
-    /** id | 标题 | 内容 | 开始日 | 截止日 | 完成 | 创建时刻 | 完成时刻 */
-    private const val FIELD_COUNT = 8
+    /** id | 标题 | 内容 | 开始日 | 截止日 | 完成 | 创建时刻 | 完成时刻 | 紧急度 | 排序 */
+    private const val FIELD_COUNT = 10
+
+    /**
+     * 加了「开始日」之后、加紧急度/排序之前的那版：8 个字段。
+     * 那段数据同样躺在用户设备上，所以必须继续认——补上默认档与默认排序。
+     */
+    private const val FIELD_COUNT_V2 = 8
 
     /**
      * 早先的格式没有「开始日」，日期只存一个。
@@ -39,7 +45,9 @@ object TaskCodec {
                 append(t.endDay?.toString() ?: ""); append(FIELD_SEP)
                 append(if (t.done) "1" else "0"); append(FIELD_SEP)
                 append(t.createdAt); append(FIELD_SEP)
-                append(t.completedAt)
+                append(t.completedAt); append(FIELD_SEP)
+                append(t.priority.name); append(FIELD_SEP)
+                append(t.order)
             }
         }
 
@@ -53,12 +61,28 @@ object TaskCodec {
         val parts = line.split(FIELD_SEP)
         return when (parts.size) {
             FIELD_COUNT -> parseCurrent(parts)
+            FIELD_COUNT_V2 -> parseV2(parts)
             FIELD_COUNT_LEGACY -> parseLegacy(parts)
             else -> null
         }
     }
 
     private fun parseCurrent(parts: List<String>): TaskItem? {
+        val base = parseV2(parts) ?: return null
+        return base.copy(
+            priority = TaskPriority.fromName(parts[8]),
+            // 排序列缺失或非数字时回落到创建时刻，等价于「按新旧排」
+            order = parts[9].toLongOrNull() ?: base.createdAt,
+        )
+    }
+
+    /**
+     * 8 字段版本：没有紧急度与排序。
+     *
+     * 两列都补默认值，而不是把它们当坏行丢掉——用户看到的必须是「任务还在，
+     * 只是没设过紧急度」，不能是记录凭空消失。
+     */
+    private fun parseV2(parts: List<String>): TaskItem? {
         val id = unescape(parts[0])
         val title = unescape(parts[1])
         // id/标题缺失的记录无法定位也无法展示，视为坏行
@@ -66,6 +90,7 @@ object TaskCodec {
 
         val rawStart = parts[3].toLongOrNull()
         val end = parts[4].toLongOrNull()
+        val createdAt = parts[6].toLongOrNull() ?: 0L
 
         return TaskItem(
             id = id,
@@ -74,8 +99,10 @@ object TaskCodec {
             startDay = normalizeStart(rawStart, end),
             endDay = end,
             done = parts[5] == "1",
-            createdAt = parts[6].toLongOrNull() ?: 0L,
+            createdAt = createdAt,
             completedAt = parts[7].toLongOrNull() ?: 0L,
+            priority = TaskPriority.DEFAULT,
+            order = createdAt,
         )
     }
 

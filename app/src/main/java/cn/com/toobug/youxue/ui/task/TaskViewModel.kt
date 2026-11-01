@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import cn.com.toobug.youxue.data.TaskItem
+import cn.com.toobug.youxue.data.TaskPriority
 import cn.com.toobug.youxue.data.TaskRepository
 import cn.com.toobug.youxue.task.TaskGrouper
+import cn.com.toobug.youxue.task.TaskOrder
 import cn.com.toobug.youxue.task.TaskUiState
 import cn.com.toobug.youxue.util.DayMath
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,26 +58,35 @@ class TaskViewModel(
      *
      * [endDay] 允许为 null —— 这正是「日期非必填」的落点：
      * 先记下来，之后拖到日期上再安排。起始日由 [TaskItem.reschedule] 统一维护。
+     *
+     * [order] 取当前时刻，于是**新建的天然排在最上面**（见 [TaskOrder.newOrder]）。
      */
-    fun add(title: String, content: String, endDay: Long?) {
+    fun add(title: String, content: String, endDay: Long?, priority: TaskPriority) {
         val t = title.trim()
         if (t.isEmpty()) return
+        val now = System.currentTimeMillis()
         val item = TaskItem(
             id = TaskItem.newId(),
             title = t,
             content = content.trim(),
-            createdAt = System.currentTimeMillis(),
+            createdAt = now,
+            priority = priority,
+            order = TaskOrder.newOrder(_state.value.tasks, now),
         ).reschedule(endDay, today)
         apply(_state.value.tasks + item)
     }
 
-    fun update(id: String, title: String, content: String, endDay: Long?) {
+    fun update(id: String, title: String, content: String, endDay: Long?, priority: TaskPriority) {
         val t = title.trim()
         if (t.isEmpty()) return
         apply(
             _state.value.tasks.map {
                 if (it.id != id) it
-                else it.copy(title = t, content = content.trim()).reschedule(endDay, today)
+                else it.copy(
+                    title = t,
+                    content = content.trim(),
+                    priority = priority,
+                ).reschedule(endDay, today)
             }
         )
     }
@@ -101,6 +112,19 @@ class TaskViewModel(
                 else it.copy(done = true, completedAt = System.currentTimeMillis())
             }
         )
+    }
+
+    /**
+     * 拖动排序的落点。
+     *
+     * [groupIds] 是拖动开始时这一组在屏幕上的顺序（含被拖的那条），
+     * [insertAt] 是**去掉被拖那条之后**的插入位。口径由界面直接给出，
+     * 这里不再二次换算——换算一次就多一处能算错的地方。
+     */
+    fun reorder(movedId: String, insertAt: Int, groupIds: List<String>) {
+        val next = TaskOrder.move(_state.value.tasks, groupIds, movedId, insertAt)
+        if (next == _state.value.tasks) return
+        apply(next)
     }
 
     fun remove(id: String) {

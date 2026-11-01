@@ -93,14 +93,15 @@ object TaskGrouper {
      *   跟着日期藏起来的话就没法把它拖到别的日期上了。
      * - **已完成**：选中日这一天完成的。既给「今天做完了什么」一个交代，
      *   也留一个勾错之后的撤销入口。
+     *
+     * 组**之间**的顺序是固定的；组**内**一律按 [TaskItem.order] 排，也就是用户拖出来的顺序
+     * （新建的权重最大，所以默认在最上面）。唯一例外是「已完成」组——它是一份
+     * 「这天做完了什么」的流水账，按完成时刻倒序才有意义，手动排序对它没有价值。
      */
     fun group(tasks: List<TaskItem>, selectedDay: Long, today: Long): List<TaskGroup> {
         val groups = mutableListOf<TaskGroup>()
 
-        val overdue = tasks.asSequence()
-            .filter { it.isOverdue(selectedDay) }
-            .sortedWith(compareBy({ it.endDay }, { it.createdAt }))
-            .toList()
+        val overdue = TaskOrder.sorted(tasks.filter { it.isOverdue(selectedDay) })
         if (overdue.isNotEmpty()) {
             groups += TaskGroup(
                 id = GROUP_OVERDUE,
@@ -111,10 +112,7 @@ object TaskGrouper {
             )
         }
 
-        val active = tasks.asSequence()
-            .filter { !it.done && it.coversDay(selectedDay) }
-            .sortedWith(compareBy({ it.endDay }, { it.createdAt }))
-            .toList()
+        val active = TaskOrder.sorted(tasks.filter { !it.done && it.coversDay(selectedDay) })
         if (active.isNotEmpty()) {
             groups += TaskGroup(
                 id = GROUP_ACTIVE,
@@ -125,15 +123,12 @@ object TaskGrouper {
             )
         }
 
-        val unscheduled = tasks.asSequence()
-            .filter { !it.done && it.endDay == null }
-            .sortedByDescending { it.createdAt }
-            .toList()
+        val unscheduled = TaskOrder.sorted(tasks.filter { !it.done && it.endDay == null })
         if (unscheduled.isNotEmpty()) {
             groups += TaskGroup(
                 id = GROUP_UNSCHEDULED,
                 label = "未安排",
-                hint = "长按卡片，拖到上面日期上",
+                hint = "长按拖动：排序或改日期",
                 accent = GroupAccent.MUTED,
                 tasks = unscheduled,
             )

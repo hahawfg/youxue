@@ -30,6 +30,20 @@ data class TaskItem(
     val createdAt: Long = 0L,
     /** 完成**时刻**（毫秒）。同一天内能分出先后，用于「已完成」区排序；未完成为 0 */
     val completedAt: Long = 0L,
+    /** 紧急程度。只影响颜色，不影响顺序 */
+    val priority: TaskPriority = TaskPriority.DEFAULT,
+    /**
+     * 手动排序权重，**越大越靠上**。
+     *
+     * 默认取 [createdAt]，所以「新添加的排在最上面」不需要额外规则——
+     * 新建时刻天然最大。老数据没有这一列时也回落到 [createdAt]，
+     * 于是迁移是零成本的：不需要改写任何一条已存在的记录。
+     *
+     * 手动拖动后由 [cn.com.toobug.youxue.task.TaskOrder.move] 统一重排成整段编号，
+     * 不在这里做「取中点」之类的增量插入——中点会被反复插入挤到相邻整数，
+     * 早晚有一天挤不下。
+     */
+    val order: Long = createdAt,
 ) {
 
     /**

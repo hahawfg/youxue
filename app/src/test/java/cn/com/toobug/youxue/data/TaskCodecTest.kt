@@ -194,4 +194,38 @@ class TaskCodecTest {
         assertEquals(20_670L, restored.startDay)
         assertEquals(20_670L, restored.endDay)
     }
+
+    // ------------------------------------------------------ 紧急度与排序
+
+    @Test
+    fun `紧急度与排序权重完整往返`() {
+        val original = task().copy(priority = TaskPriority.URGENT, order = 123_456_789L)
+        val restored = roundTrip(original).single()
+        assertEquals(TaskPriority.URGENT, restored.priority)
+        assertEquals(123_456_789L, restored.order)
+    }
+
+    @Test
+    fun `八字段旧记录补上默认紧急度与排序`() {
+        // 加紧急度之前那版：id|标题|内容|开始日|截止日|完成|创建|完成时刻
+        val v2 = "v2-1|背单词|每天十个|20670|20680|0|1700000000000|0"
+        val restored = TaskCodec.decode(v2).single()
+        assertEquals(TaskPriority.NORMAL, restored.priority)
+        // 排序回落到创建时刻，等价于「老数据仍按新旧排」
+        assertEquals(1_700_000_000_000L, restored.order)
+    }
+
+    @Test
+    fun `不认识的紧急度按普通处理而不是丢掉整条`() {
+        // 枚举名改过、或者文件被手工改坏，都不能让任务消失
+        val restored = TaskCodec.decode("a|标题|||20670|0|1|0|SOMEDAY|5").single()
+        assertEquals(TaskPriority.NORMAL, restored.priority)
+    }
+
+    @Test
+    fun `排序列坏掉时回落到创建时刻`() {
+        val restored = TaskCodec.decode("a|标题|||20670|0|1700000000000|0|HIGH|坏数字").single()
+        assertEquals(TaskPriority.HIGH, restored.priority)
+        assertEquals(1_700_000_000_000L, restored.order)
+    }
 }

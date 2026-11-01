@@ -168,14 +168,36 @@ class TaskGrouperTest {
     // ------------------------------------------------------ 组内排序
 
     @Test
-    fun `要做组按截止日升序 同截止按创建时间`() {
+    fun `要做组按手动权重排 截止日不再参与`() {
+        // 权重和截止日故意反着给：如果还按「截止日升序」排，结果会是 near-later 在前。
+        // 改成手动排序之后，截止日只作为卡片上的一个标签，不再决定位置
         val tasks = listOf(
-            span("far", to = today + 5, createdAt = 1),
-            span("near-late", to = today + 1, createdAt = 300),
-            span("near-early", to = today + 1, createdAt = 100),
+            span("far-first", to = today + 5, createdAt = 1).copy(order = 900L),
+            span("near-later", to = today + 1, createdAt = 2).copy(order = 100L),
         )
         val group = TaskGrouper.group(tasks, today, today).first { it.id == TaskGrouper.GROUP_ACTIVE }
-        assertEquals(listOf("near-early", "near-late", "far"), group.tasks.map { it.id })
+        assertEquals(listOf("far-first", "near-later"), group.tasks.map { it.id })
+    }
+
+    @Test
+    fun `权重相同时新建的排前面`() {
+        // order 默认等于 createdAt，所以没手动拖过的列表就是「新的在上」
+        val tasks = listOf(
+            span("older", to = today + 1, createdAt = 1),
+            span("newer", to = today + 1, createdAt = 2),
+        )
+        val group = TaskGrouper.group(tasks, today, today).first { it.id == TaskGrouper.GROUP_ACTIVE }
+        assertEquals(listOf("newer", "older"), group.tasks.map { it.id })
+    }
+
+    @Test
+    fun `已过期组同样按手动权重排`() {
+        val tasks = listOf(
+            span("late-deadline", to = today - 1, createdAt = 1).copy(order = 900L),
+            span("early-deadline", to = today - 5, createdAt = 2).copy(order = 100L),
+        )
+        val group = TaskGrouper.group(tasks, today, today).first { it.id == TaskGrouper.GROUP_OVERDUE }
+        assertEquals(listOf("late-deadline", "early-deadline"), group.tasks.map { it.id })
     }
 
     @Test
